@@ -112,6 +112,31 @@ class PostSchedulerUI(QMainWindow):
         self.instagram_credentials.setLayout(instagram_form)
         self.instagram_credentials.hide()
         top_layout.addWidget(self.instagram_credentials)
+
+        # YouTube Settings
+        self.youtube_settings = QGroupBox("YouTube Ayarları")
+        youtube_settings_layout = QFormLayout()
+        
+        # Privacy Status
+        self.privacy_status = QComboBox()
+        self.privacy_status.addItems(["public", "private", "unlisted"])
+        youtube_settings_layout.addRow("Gizlilik:", self.privacy_status)
+        
+        # Made for Kids setting
+        self.made_for_kids = QComboBox()
+        self.made_for_kids.addItems(["Hayır", "Evet"])
+        youtube_settings_layout.addRow("Çocuklar için mi?", self.made_for_kids)
+        
+        # Category
+        self.category = QLineEdit()
+        youtube_settings_layout.addRow("Kategori ID:", self.category)
+        
+        # Tags
+        self.tags = QLineEdit()
+        youtube_settings_layout.addRow("Etiketler (virgülle ayrılmış):", self.tags)
+        
+        self.youtube_settings.setLayout(youtube_settings_layout)
+        top_layout.addWidget(self.youtube_settings)
         
         # Planlama butonu
         self.schedule_button = QPushButton("Gönderileri Planla")
@@ -153,7 +178,11 @@ class PostSchedulerUI(QMainWindow):
                          scheduled_time TEXT NOT NULL,
                          status TEXT NOT NULL DEFAULT 'Bekliyor',
                          title TEXT,
-                         description TEXT)''')
+                         description TEXT,
+                         privacy_status TEXT,
+                         made_for_kids TEXT,
+                         category TEXT,
+                         tags TEXT)''')
             
             conn.commit()
             conn.close()
@@ -165,9 +194,9 @@ class PostSchedulerUI(QMainWindow):
             sys.exit(1)
 
     def setup_table(self):
-        self.posts_table.setColumnCount(6)
+        self.posts_table.setColumnCount(10)
         self.posts_table.setHorizontalHeaderLabels([
-            "Platform", "Dosya", "Tarih/Saat", "Durum", "Başlık", "Açıklama"
+            "Platform", "Dosya", "Tarih/Saat", "Durum", "Başlık", "Açıklama", "Gizlilik", "Çocuklar için mi?", "Kategori", "Etiketler"
         ])
         
         header = self.posts_table.horizontalHeader()
@@ -177,6 +206,10 @@ class PostSchedulerUI(QMainWindow):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
         
         self.posts_table.setAlternatingRowColors(True)
 
@@ -234,9 +267,14 @@ class PostSchedulerUI(QMainWindow):
                 platform = "YouTube" if self.youtube_radio.isChecked() else \
                           "Instagram Reels" if self.instagram_reels_radio.isChecked() else \
                           "Instagram"
+
+                privacy_status = self.privacy_status.currentText()
+                made_for_kids = self.made_for_kids.currentText()
+                category = self.category.text()
+                tags = self.tags.text()
                 
                 if self.save_post_to_db(
-                    platform, file_path, scheduled_time, title, description
+                    platform, file_path, scheduled_time, title, description, privacy_status, made_for_kids, category, tags
                 ):
                     print(f"Gönderi planlandı: {platform} - {scheduled_time}")
                 
@@ -301,6 +339,10 @@ class PostSchedulerUI(QMainWindow):
         self.start_time.setTime(QTime.currentTime())
         self.interval_hours.setValue(0)
         self.interval_minutes.setValue(0)
+        self.privacy_status.setCurrentIndex(1)  # Default to 'private'
+        self.made_for_kids.setCurrentIndex(0)  # Default to 'No'
+        self.category.clear()
+        self.tags.clear()
 
     def load_scheduled_posts(self):
         try:
@@ -309,7 +351,7 @@ class PostSchedulerUI(QMainWindow):
             
             posts = c.execute('''
                 SELECT id, platform, file_path, scheduled_time, status, 
-                       title, description
+                       title, description, privacy_status, made_for_kids, category, tags
                 FROM scheduled_posts 
                 ORDER BY scheduled_time
             ''').fetchall()
@@ -322,22 +364,26 @@ class PostSchedulerUI(QMainWindow):
                 self.posts_table.setItem(i, 3, QTableWidgetItem(str(post[4])))  # Durum
                 self.posts_table.setItem(i, 4, QTableWidgetItem(str(post[5] or "")))  # Başlık
                 self.posts_table.setItem(i, 5, QTableWidgetItem(str(post[6] or "")))  # Açıklama
+                self.posts_table.setItem(i, 6, QTableWidgetItem(str(post[7])))  # Gizlilik
+                self.posts_table.setItem(i, 7, QTableWidgetItem(str(post[8])))  # Çocuklar için mi?
+                self.posts_table.setItem(i, 8, QTableWidgetItem(str(post[9] or "")))  # Kategori
+                self.posts_table.setItem(i, 9, QTableWidgetItem(str(post[10] or "")))  # Etiketler
             
             conn.close()
         except Exception as e:
             print(f"Veritabanı okuma hatası: {str(e)}")
             QMessageBox.warning(self, "Hata", "Planlanan gönderiler yüklenirken bir hata oluştu!")
 
-    def save_post_to_db(self, platform, file_path, scheduled_time, title='', description=''):
+    def save_post_to_db(self, platform, file_path, scheduled_time, title='', description='', privacy_status='private', made_for_kids='Hayır', category='', tags=''):
         try:
             conn = sqlite3.connect('scheduler.db')
             c = conn.cursor()
             
             c.execute('''INSERT INTO scheduled_posts 
-                        (platform, file_path, scheduled_time, status, title, description)
-                        VALUES (?, ?, ?, ?, ?, ?)''',
+                        (platform, file_path, scheduled_time, status, title, description, privacy_status, made_for_kids, category, tags)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                      (platform, file_path, scheduled_time.isoformat(), 
-                      "Bekliyor", title, description))
+                      "Bekliyor", title, description, privacy_status, made_for_kids, category, tags))
             
             conn.commit()
             conn.close()
@@ -347,7 +393,7 @@ class PostSchedulerUI(QMainWindow):
             QMessageBox.warning(self, "Hata", "Gönderi kaydedilirken bir hata oluştu!")
             return False
 
-    def upload_youtube_video(self, file_path, title, description):
+    def upload_youtube_video(self, file_path, title, description, privacy_status, made_for_kids, category, tags):
         try:
             if not self.youtube_credentials:
                 if not self.authenticate_youtube():
@@ -359,10 +405,12 @@ class PostSchedulerUI(QMainWindow):
                 'snippet': {
                     'title': title,
                     'description': description,
-                    'categoryId': '22'  # People & Blogs kategorisi
+                    'categoryId': category,
+                    'tags': tags.split(',')
                 },
                 'status': {
-                    'privacyStatus': 'private'  # veya 'public', 'unlisted'
+                    'privacyStatus': privacy_status,  # 'private', 'public', 'unlisted'
+                    'madeForKids': made_for_kids == "Evet"
                 }
             }
             
@@ -456,14 +504,14 @@ class PostSchedulerUI(QMainWindow):
             
             posts = c.execute('''
                 SELECT id, platform, file_path, scheduled_time, status, 
-                       title, description
+                       title, description, privacy_status, made_for_kids, category, tags
                 FROM scheduled_posts 
                 WHERE status = 'Bekliyor' 
                 AND datetime(scheduled_time) <= datetime(?)
             ''', (current_time.isoformat(),)).fetchall()
             
             for post in posts:
-                post_id, platform, file_path, scheduled_time, status, title, description = post
+                post_id, platform, file_path, scheduled_time, status, title, description, privacy_status, made_for_kids, category, tags = post
                 
                 try:
                     success = False
@@ -471,7 +519,7 @@ class PostSchedulerUI(QMainWindow):
                     
                     if platform == "YouTube":
                         success, result = self.upload_youtube_video(
-                            file_path, title, description
+                            file_path, title, description, privacy_status, made_for_kids, category, tags
                         )
                     else:
                         is_reels = (platform == "Instagram Reels")
