@@ -34,6 +34,9 @@ class PostSchedulerUI(QMainWindow):
         self.youtube_credentials = None
         self.instagram_client = None
         
+        # YouTube categories
+        self.youtube_categories = self.get_youtube_categories()
+        
         # Planlanan gönderileri yükle
         self.load_scheduled_posts()
         
@@ -112,29 +115,29 @@ class PostSchedulerUI(QMainWindow):
         self.instagram_credentials.setLayout(instagram_form)
         self.instagram_credentials.hide()
         top_layout.addWidget(self.instagram_credentials)
-
-        # YouTube Settings
+        
+        # YouTube Ayarları
         self.youtube_settings = QGroupBox("YouTube Ayarları")
         youtube_settings_layout = QFormLayout()
-        
+
         # Privacy Status
         self.privacy_status = QComboBox()
         self.privacy_status.addItems(["public", "private", "unlisted"])
         youtube_settings_layout.addRow("Gizlilik:", self.privacy_status)
-        
+
         # Made for Kids setting
         self.made_for_kids = QComboBox()
         self.made_for_kids.addItems(["Hayır", "Evet"])
         youtube_settings_layout.addRow("Çocuklar için mi?", self.made_for_kids)
-        
+
         # Category
-        self.category = QLineEdit()
-        youtube_settings_layout.addRow("Kategori ID:", self.category)
-        
+        self.category = QComboBox()
+        youtube_settings_layout.addRow("Kategori:", self.category)
+
         # Tags
         self.tags = QLineEdit()
         youtube_settings_layout.addRow("Etiketler (virgülle ayrılmış):", self.tags)
-        
+
         self.youtube_settings.setLayout(youtube_settings_layout)
         top_layout.addWidget(self.youtube_settings)
         
@@ -270,7 +273,7 @@ class PostSchedulerUI(QMainWindow):
 
                 privacy_status = self.privacy_status.currentText()
                 made_for_kids = self.made_for_kids.currentText()
-                category = self.category.text()
+                category = self.youtube_categories[self.category.currentText()]
                 tags = self.tags.text()
                 
                 if self.save_post_to_db(
@@ -340,8 +343,8 @@ class PostSchedulerUI(QMainWindow):
         self.interval_hours.setValue(0)
         self.interval_minutes.setValue(0)
         self.privacy_status.setCurrentIndex(1)  # Default to 'private'
-        self.made_for_kids.setCurrentIndex(0)  # Default to 'No'
-        self.category.clear()
+        self.made_for_kids.setCurrentIndex(0)  # Default to 'Hayır'
+        self.category.setCurrentIndex(0)  # Default to first category
         self.tags.clear()
 
     def load_scheduled_posts(self):
@@ -558,6 +561,25 @@ class PostSchedulerUI(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_scheduled_posts)
         self.timer.start(60000)  # Her dakika kontrol et
+
+    def get_youtube_categories(self):
+        try:
+            if not self.youtube_credentials:
+                if not self.authenticate_youtube():
+                    raise Exception("YouTube kimlik doğrulaması başarısız!")
+                    
+            youtube = build('youtube', 'v3', credentials=self.youtube_credentials)
+            request = youtube.videoCategories().list(part="snippet", regionCode="TR")
+            response = request.execute()
+            
+            categories = {item["snippet"]["title"]: item["id"] for item in response["items"]}
+            self.category.addItems(categories.keys())
+            return categories
+            
+        except Exception as e:
+            print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
+            QMessageBox.warning(self, "Hata", "YouTube kategorileri alınırken hata oluştu!")
+            return {}
 
 def main():
     app = QApplication(sys.argv)
