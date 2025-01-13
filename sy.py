@@ -10,6 +10,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from instagrapi import Client
+
 import os
 import json
 
@@ -451,6 +452,62 @@ class PostSchedulerUI(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_scheduled_posts)
         self.timer.start(60000)  # Her dakika kontrol et
+
+
+
+    def load_scheduled_posts(self):
+        try:
+            conn = sqlite3.connect('scheduler.db')
+            c = conn.cursor()
+
+            # Tüm kayıtları al
+            posts = c.execute('''
+                SELECT id, platform, file_path, scheduled_time, status, 
+                       COALESCE(title, '') as title, 
+                       COALESCE(description, '') as description
+                FROM scheduled_posts 
+                ORDER BY scheduled_time
+            ''').fetchall()
+
+            # Tabloyu temizle ve yeni kayıtları ekle
+            self.posts_table.setRowCount(len(posts))
+            for i, post in enumerate(posts):
+                self.posts_table.setItem(i, 0, QTableWidgetItem(str(post[1])))  # Platform
+                self.posts_table.setItem(i, 1, QTableWidgetItem(os.path.basename(str(post[2]))))  # Dosya
+                self.posts_table.setItem(i, 2, QTableWidgetItem(str(post[3])))  # Tarih/Saat
+                self.posts_table.setItem(i, 3, QTableWidgetItem(str(post[4])))  # Durum
+                self.posts_table.setItem(i, 4, QTableWidgetItem(str(post[5])))  # Başlık
+                self.posts_table.setItem(i, 5, QTableWidgetItem(str(post[6])))  # Açıklama
+
+            conn.close()
+        except Exception as e:
+            print(f"Veritabanı okuma hatası: {str(e)}")
+            QMessageBox.warning(self, "Hata", "Planlanan gönderiler yüklenirken bir hata oluştu!")
+
+    def save_post_to_db(self, platform, file_path, scheduled_time, title='', description=''):
+        try:
+            conn = sqlite3.connect('scheduler.db')
+            c = conn.cursor()
+
+            c.execute('''INSERT INTO scheduled_posts 
+                        (platform, file_path, scheduled_time, status, title, description)
+                        VALUES (?, ?, ?, ?, ?, ?)''',
+                     (platform, file_path, scheduled_time.isoformat(), 
+                      "Bekliyor", title, description))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Veritabanı kayıt hatası: {str(e)}")
+            QMessageBox.warning(self, "Hata", "Gönderi kaydedilirken bir hata oluştu!")
+            return False
+
+    def update_posts_table(self):
+        self.load_scheduled_posts()
+
+
+
 
 def main():
     app = QApplication(sys.argv)
