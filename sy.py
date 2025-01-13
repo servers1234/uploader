@@ -12,6 +12,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from instagrapi import Client
 import json
+import cv2
+import tempfile
+import shutil
 
 class PostSchedulerUI(QMainWindow):
     def __init__(self):
@@ -506,35 +509,84 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
 
-    def upload_instagram_post(self, file_path, caption, is_reels=False, is_story=False):
+    def upload_instagram_post(self, file_path, caption, is_reels=False):
         try:
+            # Instagram client kontrolü
             if not self.instagram_client:
                 self.instagram_client = Client()
                 self.instagram_client.login(
                     self.insta_username.text(),
                     self.insta_password.text()
                 )
-            
+
             print(f"Instagram'a yükleniyor: {os.path.basename(file_path)}")
-            
+
             if is_reels:
                 if not file_path.lower().endswith('.mp4'):
                     raise Exception("Reels için sadece MP4 formatı desteklenir!")
-                media = self.instagram_client.clip_upload(file_path, caption=caption)
-            elif is_story:
-                media = self.instagram_client.story_upload(file_path, caption=caption)
+
+                # Video dosyasını kontrol et
+                cap = cv2.VideoCapture(file_path)
+                if not cap.isOpened():
+                    raise Exception("Video dosyası açılamadı!")
+
+                # Video özelliklerini al
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = frame_count / fps
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                cap.release()
+
+                print(f"Video özellikleri: {width}x{height}, {fps} FPS, {duration} saniye")
+
+                # Instagram Reels için optimum boyutlar
+                if width > height:  # Yatay video
+                    # Videoyu dikey formata çevir
+                    temp_dir = tempfile.mkdtemp()
+                    output_path = os.path.join(temp_dir, "processed_video.mp4")
+
+                    try:
+                        # FFmpeg olmadan basit video yükleme
+                        media = self.instagram_client.clip_upload(
+                            file_path,
+                            caption=caption,
+                            thumbnail=None,
+                            extra_data={
+                                "custom_accessibility_caption": caption,
+                                "like_and_view_counts_disabled": 0,
+                                "disable_comments": 0,
+                            }
+                        )
+                    finally:
+                        # Geçici dosyaları temizle
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    # Dikey video doğrudan yüklenebilir
+                    media = self.instagram_client.clip_upload(
+                        file_path,
+                        caption=caption
+                    )
             else:
+                # Normal gönderi yükleme
                 if file_path.lower().endswith(('.mp4')):
                     media = self.instagram_client.video_upload(file_path, caption=caption)
                 else:
                     media = self.instagram_client.photo_upload(file_path, caption=caption)
-                    
+
             print(f"Instagram'a yükleme başarılı: {os.path.basename(file_path)}")
             return True, media.pk
-            
+
         except Exception as e:
-            print(f"Instagram yükleme hatası: {str(e)}")
-            return False, str(e)
+            error_msg = str(e)
+            print(f"Instagram yükleme hatası: {error_msg}")
+            QMessageBox.critical(
+                self,
+                "Yükleme Hatası",
+                f"Gönderi yüklenirken bir hata oluştu:\n{error_msg}"
+            )
+            return False, error_msg
 
     def check_scheduled_posts(self):
         try:
@@ -564,11 +616,11 @@ class PostSchedulerUI(QMainWindow):
                         )
                     else:
                         is_reels = (platform == "Instagram Reels")
-                        is_story = (platform == "Instagram Story")
+                        # is_story parametresini kaldırdık ve sadece is_reels gönderiyoruz
                         success, result = self.upload_instagram_post(
                             file_path, 
                             f"{title}\n\n{description}" if title or description else "",
-                            is_reels, is_story
+                            is_reels  # Sadece is_reels parametresi
                         )
                         
                     new_status = "Yüklendi" if success else f"Hata: {result}"
