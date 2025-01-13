@@ -53,9 +53,11 @@ class PostSchedulerUI(QMainWindow):
         self.youtube_radio = QRadioButton("YouTube")
         self.instagram_radio = QRadioButton("Instagram")
         self.instagram_reels_radio = QRadioButton("Instagram Reels")
+        self.instagram_story_radio = QRadioButton("Instagram Story")
         platform_layout.addWidget(self.youtube_radio)
         platform_layout.addWidget(self.instagram_radio)
         platform_layout.addWidget(self.instagram_reels_radio)
+        platform_layout.addWidget(self.instagram_story_radio)
         top_layout.addLayout(platform_layout)
         
         # Dosya seçimi
@@ -167,6 +169,7 @@ class PostSchedulerUI(QMainWindow):
         self.youtube_radio.toggled.connect(self.toggle_instagram_credentials)
         self.instagram_radio.toggled.connect(self.toggle_instagram_credentials)
         self.instagram_reels_radio.toggled.connect(self.toggle_instagram_credentials)
+        self.instagram_story_radio.toggled.connect(self.toggle_instagram_credentials)
 
     def init_database(self):
         try:
@@ -234,7 +237,8 @@ class PostSchedulerUI(QMainWindow):
     def toggle_instagram_credentials(self):
         self.instagram_credentials.setVisible(
             self.instagram_radio.isChecked() or 
-            self.instagram_reels_radio.isChecked()
+            self.instagram_reels_radio.isChecked() or
+            self.instagram_story_radio.isChecked()
         )
 
     def schedule_posts(self):
@@ -269,6 +273,7 @@ class PostSchedulerUI(QMainWindow):
                 
                 platform = "YouTube" if self.youtube_radio.isChecked() else \
                           "Instagram Reels" if self.instagram_reels_radio.isChecked() else \
+                          "Instagram Story" if self.instagram_story_radio.isChecked() else \
                           "Instagram"
 
                 privacy_status = self.privacy_status.currentText()
@@ -305,12 +310,14 @@ class PostSchedulerUI(QMainWindow):
             
         if not (self.youtube_radio.isChecked() or 
                 self.instagram_radio.isChecked() or 
-                self.instagram_reels_radio.isChecked()):
+                self.instagram_reels_radio.isChecked() or
+                self.instagram_story_radio.isChecked()):
             QMessageBox.warning(self, "Hata", "Lütfen bir platform seçin!")
             return False
             
         if (self.instagram_radio.isChecked() or 
-            self.instagram_reels_radio.isChecked()):
+            self.instagram_reels_radio.isChecked() or
+            self.instagram_story_radio.isChecked()):
             if not self.insta_username.text() or not self.insta_password.text():
                 QMessageBox.warning(
                     self, 
@@ -336,6 +343,7 @@ class PostSchedulerUI(QMainWindow):
         self.youtube_radio.setChecked(False)
         self.instagram_radio.setChecked(False)
         self.instagram_reels_radio.setChecked(False)
+        self.instagram_story_radio.setChecked(False)
         self.insta_username.clear()
         self.insta_password.clear()
         self.start_date.setDateTime(QDateTime.currentDateTime())
@@ -457,7 +465,7 @@ class PostSchedulerUI(QMainWindow):
                 os.remove('youtube_token.json')  # Delete existing token file to force re-authentication
                 
             if os.path.exists('youtube_token.json'):
-                creds = Credentials.from_authorized_user_file('youtube_token.json', SCOPES)
+                creds = Credentials.from_authorized_user_file('youtube_token.json',creds, SCOPES)
                 
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
@@ -476,6 +484,7 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             print(f"YouTube kimlik doğrulama hatası: {str(e)}")
             return False
+
     def fetch_youtube_categories(self):
         try:
             if not self.youtube_credentials:
@@ -496,7 +505,8 @@ class PostSchedulerUI(QMainWindow):
         
         except Exception as e:
             print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
-    def upload_instagram_post(self, file_path, caption, is_reels=False):
+
+    def upload_instagram_post(self, file_path, caption, is_reels=False, is_story=False):
         try:
             if not self.instagram_client:
                 self.instagram_client = Client()
@@ -511,6 +521,8 @@ class PostSchedulerUI(QMainWindow):
                 if not file_path.lower().endswith('.mp4'):
                     raise Exception("Reels için sadece MP4 formatı desteklenir!")
                 media = self.instagram_client.clip_upload(file_path, caption=caption)
+            elif is_story:
+                media = self.instagram_client.story_upload(file_path, caption=caption)
             else:
                 if file_path.lower().endswith(('.mp4')):
                     media = self.instagram_client.video_upload(file_path, caption=caption)
@@ -552,10 +564,11 @@ class PostSchedulerUI(QMainWindow):
                         )
                     else:
                         is_reels = (platform == "Instagram Reels")
+                        is_story = (platform == "Instagram Story")
                         success, result = self.upload_instagram_post(
                             file_path, 
                             f"{title}\n\n{description}" if title or description else "",
-                            is_reels
+                            is_reels, is_story
                         )
                         
                     new_status = "Yüklendi" if success else f"Hata: {result}"
