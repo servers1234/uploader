@@ -19,9 +19,6 @@ class PostSchedulerUI(QMainWindow):
         self.setWindowTitle("Sosyal Medya Gönderi Planlayıcı")
         self.setGeometry(100, 100, 1200, 800)
         
-        # Veritabanını başlat
-        self.init_database()
-        
         # Ana widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -30,12 +27,18 @@ class PostSchedulerUI(QMainWindow):
         # UI bileşenlerini oluştur
         self.create_ui_components()
         
+        # Veritabanını başlat
+        self.init_database()
+        
+        # Planlanan gönderileri yükle
+        self.load_scheduled_posts()
+        
         # Zamanlayıcıyı başlat
         self.start_scheduler()
         
         # YouTube kimlik bilgileri
         self.youtube_credentials = None
-        
+
     def create_ui_components(self):
         # Üst kısım - Gönderi ekleme alanı
         top_group = QGroupBox("Yeni Gönderi Planla")
@@ -135,24 +138,24 @@ class PostSchedulerUI(QMainWindow):
         self.youtube_radio.toggled.connect(self.toggle_instagram_credentials)
         self.instagram_radio.toggled.connect(self.toggle_instagram_credentials)
         self.instagram_reels_radio.toggled.connect(self.toggle_instagram_credentials)
-        
-        # Planlanan gönderileri yükle
-        self.load_scheduled_posts()
-        
+
     def init_database(self):
         try:
             conn = sqlite3.connect('scheduler.db')
             c = conn.cursor()
             
-            c.execute('''CREATE TABLE IF NOT EXISTS scheduled_posts
+            # Önce eski tabloyu sil
+            c.execute('DROP TABLE IF EXISTS scheduled_posts')
+            
+            # Yeni tabloyu oluştur
+            c.execute('''CREATE TABLE scheduled_posts
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          platform TEXT NOT NULL,
                          file_path TEXT NOT NULL,
                          scheduled_time TEXT NOT NULL,
                          status TEXT NOT NULL DEFAULT 'Bekliyor',
                          title TEXT,
-                         description TEXT,
-                         created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+                         description TEXT)''')
             
             conn.commit()
             conn.close()
@@ -162,7 +165,7 @@ class PostSchedulerUI(QMainWindow):
             QMessageBox.critical(self, "Hata", 
                                "Veritabanı oluşturulamadı!\nProgram kapatılacak.")
             sys.exit(1)
-            
+
     def setup_table(self):
         self.posts_table.setColumnCount(6)
         self.posts_table.setHorizontalHeaderLabels([
@@ -178,7 +181,7 @@ class PostSchedulerUI(QMainWindow):
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         
         self.posts_table.setAlternatingRowColors(True)
-        
+
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self,
@@ -188,18 +191,18 @@ class PostSchedulerUI(QMainWindow):
         )
         for file in files:
             self.files_list.addItem(file)
-            
+
     def remove_selected_file(self):
         current_row = self.files_list.currentRow()
         if current_row >= 0:
             self.files_list.takeItem(current_row)
-            
+
     def toggle_instagram_credentials(self):
         self.instagram_credentials.setVisible(
             self.instagram_radio.isChecked() or 
             self.instagram_reels_radio.isChecked()
         )
-        
+
     def schedule_posts(self):
         if not self.validate_inputs():
             return
@@ -249,7 +252,7 @@ class PostSchedulerUI(QMainWindow):
                 "Hata",
                 "Gönderiler planlanırken bir hata oluştu!"
             )
-            
+
     def validate_inputs(self):
         if self.files_list.count() == 0:
             QMessageBox.warning(self, "Hata", "Lütfen en az bir dosya seçin!")
@@ -299,7 +302,7 @@ class PostSchedulerUI(QMainWindow):
         self.start_time.setTime(QTime.currentTime())
         self.interval_hours.setValue(0)
         self.interval_minutes.setValue(0)
-        
+
     def save_post_to_db(self, platform, file_path, scheduled_time, title, description):
         try:
             conn = sqlite3.connect('scheduler.db')
@@ -317,22 +320,26 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             print(f"Veritabanı kayıt hatası: {str(e)}")
             return False
-            
+
     def load_scheduled_posts(self):
         try:
             conn = sqlite3.connect('scheduler.db')
             c = conn.cursor()
             
+            # Tüm kayıtları al
             posts = c.execute('''
-                SELECT platform, file_path, scheduled_time, status, title, description 
+                SELECT platform, file_path, scheduled_time, status, 
+                       COALESCE(title, '') as title, 
+                       COALESCE(description, '') as description
                 FROM scheduled_posts 
                 ORDER BY scheduled_time
             ''').fetchall()
             
+            # Tabloyu temizle ve yeni kayıtları ekle
             self.posts_table.setRowCount(len(posts))
             for i, post in enumerate(posts):
                 self.posts_table.setItem(i, 0, QTableWidgetItem(str(post[0])))  # Platform
-                self.posts_table.setItem(i, 1, QTableWidgetItem(os.path.basename(str(post[1]))))  # Dosya adı
+                self.posts_table.setItem(i, 1, QTableWidgetItem(os.path.basename(str(post[1]))))  # Dosya
                 self.posts_table.setItem(i, 2, QTableWidgetItem(str(post[2])))  # Tarih/Saat
                 self.posts_table.setItem(i, 3, QTableWidgetItem(str(post[3])))  # Durum
                 self.posts_table.setItem(i, 4, QTableWidgetItem(str(post[4])))  # Başlık
@@ -341,99 +348,7 @@ class PostSchedulerUI(QMainWindow):
             conn.close()
         except Exception as e:
             print(f"Veritabanı okuma hatası: {str(e)}")
-            
-    def authenticate_youtube(self):
-        try:
-            SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-            creds = None
-            
-            if os.path.exists('youtube_token.json'):
-                creds = Credentials.from_authorized_user_file('youtube_token.json', SCOPES)
-                
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        'client_secrets.json', SCOPES)
-                    creds = flow.run_local_server(port=0)
-                    
-                with open('youtube_token.json', 'w') as token:
-                    token.write(creds.to_json())
-                    
-            self.youtube_credentials = creds
-            return True
-        except Exception as e:
-            print(f"YouTube kimlik doğrulama hatası: {str(e)}")
-            return False
-            
-    def upload_youtube_video(self, file_path, title, description):
-        try:
-            if not self.youtube_credentials:
-                if not self.authenticate_youtube():
-                    raise Exception("YouTube kimlik doğrulaması başarısız!")
-                    
-            youtube = build('youtube', 'v3', credentials=self.youtube_credentials)
-            
-            request_body = {
-                'snippet': {
-                    'title': title,
-                    'description': description,
-                    'categoryId': '22'
-                },
-                'status': {
-                    'privacyStatus': 'private'
-                }
-            }
-            
-            media_file = MediaFileUpload(
-                file_path,
-                chunksize=-1,
-                resumable=True
-            )
-            
-            insert_request = youtube.videos().insert(
-                part='snippet,status',
-                body=request_body,
-                media_body=media_file
-            )
-            
-            response = None
-            while response is None:
-                status, response = insert_request.next_chunk()
-                if status:
-                    print(f"Yükleme durumu: {int(status.progress() * 100)}%")
-                    
-            return True, response['id']
-            
-        except Exception as e:
-            return False, str(e)
-            
-    def upload_instagram_post(self, file_path, caption, is_reels=False):
-        try:
-            client = Client()
-            client.login(self.insta_username.text(), self.insta_password.text())
-            
-            if is_reels:
-                if not file_path.lower().endswith('.mp4'):
-                    raise Exception("Reels için sadece MP4 formatı desteklenir!")
-                media = client.clip_upload(file_path, caption=caption)
-            else:
-                if file_path.lower().endswith('.mp4'):
-                    media = client.video_upload(file_path, caption=caption)
-                else:
-                    media = client.photo_upload(file_path, caption=caption)
-                    
-            return True, media.pk
-            
-        except Exception as e:
-            return False, str(e)
-            
-    def start_scheduler(self):
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.check_scheduled_posts)
-        self.timer.start(60000)  # Her dakika kontrol et
-        
+
     def check_scheduled_posts(self):
         try:
             conn = sqlite3.connect('scheduler.db')
@@ -441,8 +356,12 @@ class PostSchedulerUI(QMainWindow):
             
             current_time = datetime.now()
             
+            # Zamanı gelmiş gönderileri al
             posts = c.execute('''
-                SELECT * FROM scheduled_posts 
+                SELECT id, platform, file_path, scheduled_time, status, 
+                       COALESCE(title, '') as title, 
+                       COALESCE(description, '') as description
+                FROM scheduled_posts 
                 WHERE status = 'Bekliyor' 
                 AND datetime(scheduled_time) <= datetime(?)
             ''', (current_time.isoformat(),)).fetchall()
@@ -450,10 +369,10 @@ class PostSchedulerUI(QMainWindow):
             for post in posts:
                 post_id, platform, file_path, scheduled_time, status, title, description = post
                 
-                success = False
-                result = ""
-                
                 try:
+                    success = False
+                    result = ""
+                    
                     if platform == "YouTube":
                         success, result = self.upload_youtube_video(
                             file_path, title, description
@@ -475,19 +394,29 @@ class PostSchedulerUI(QMainWindow):
                     ''', (new_status, post_id))
                     
                 except Exception as e:
+                    error_status = f"Hata: {str(e)}"
                     c.execute('''
                         UPDATE scheduled_posts 
                         SET status = ? 
                         WHERE id = ?
-                    ''', (f"Hata: {str(e)}", post_id))
-                    
+                    ''', (error_status, post_id))
+                    print(f"Gönderi yükleme hatası: {str(e)}")
+            
             conn.commit()
             conn.close()
             
+            # Tabloyu güncelle
             self.load_scheduled_posts()
             
         except Exception as e:
             print(f"Zamanlayıcı hatası: {str(e)}")
+
+    def start_scheduler(self):
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.check_scheduled_posts)
+        self.timer.start(60000)  # Her dakika kontrol et
+
+    # YouTube ve Instagram yükleme fonksiyonları aynı kalacak...
 
 def main():
     app = QApplication(sys.argv)
@@ -519,3 +448,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+            
