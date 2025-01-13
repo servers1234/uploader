@@ -446,9 +446,16 @@ class PostSchedulerUI(QMainWindow):
 
     def authenticate_youtube(self):
         try:
-            SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+            SCOPES = [
+                'https://www.googleapis.com/auth/youtube.upload',
+                'https://www.googleapis.com/auth/youtube.force-ssl',
+                'https://www.googleapis.com/auth/youtube.readonly'
+            ]
             creds = None
             
+            if os.path.exists('youtube_token.json'):
+                os.remove('youtube_token.json')  # Delete existing token file to force re-authentication
+                
             if os.path.exists('youtube_token.json'):
                 creds = Credentials.from_authorized_user_file('youtube_token.json', SCOPES)
                 
@@ -469,7 +476,26 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             print(f"YouTube kimlik doğrulama hatası: {str(e)}")
             return False
+    def fetch_youtube_categories(self):
+        try:
+            if not self.youtube_credentials:
+                if not self.authenticate_youtube():
+                    raise Exception("YouTube kimlik doğrulaması başarısız!")
 
+            youtube = build('youtube', 'v3', credentials=self.youtube_credentials)
+
+            request = youtube.videoCategories().list(
+                part="snippet",
+                regionCode="TR"
+            )
+            response = request.execute()
+
+            categories = response.get('items', [])
+            for category in categories:
+                print(f"Category ID: {category['id']}, Title: {category['snippet']['title']}")
+        
+        except Exception as e:
+            print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
     def upload_instagram_post(self, file_path, caption, is_reels=False):
         try:
             if not self.instagram_client:
