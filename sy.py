@@ -3,15 +3,14 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import sys
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, date, time
+import os
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from instagrapi import Client
-
-import os
 import json
 
 class PostSchedulerUI(QMainWindow):
@@ -31,15 +30,15 @@ class PostSchedulerUI(QMainWindow):
         # Veritabanını başlat
         self.init_database()
         
+        # Kimlik bilgileri
+        self.youtube_credentials = None
+        self.instagram_client = None
+        
         # Planlanan gönderileri yükle
         self.load_scheduled_posts()
         
         # Zamanlayıcıyı başlat
         self.start_scheduler()
-        
-        # Kimlik bilgileri
-        self.youtube_credentials = None
-        self.instagram_client = None
 
     def create_ui_components(self):
         # Üst kısım - Gönderi ekleme alanı
@@ -207,9 +206,15 @@ class PostSchedulerUI(QMainWindow):
             return
             
         try:
-            start_datetime = datetime.combine(
-                self.start_date.date().toPyDate(),
-                self.start_time.time().toPyTime()
+            start_date = self.start_date.date().toPyDate()
+            start_time = self.start_time.time().toPyTime()
+            start_datetime = datetime(
+                start_date.year,
+                start_date.month,
+                start_date.day,
+                start_time.hour,
+                start_time.minute,
+                start_time.second
             )
             
             interval = timedelta(
@@ -249,7 +254,7 @@ class PostSchedulerUI(QMainWindow):
             QMessageBox.critical(
                 self,
                 "Hata",
-                "Gönderiler planlanırken bir hata oluştu!"
+                f"Gönderiler planlanırken bir hata oluştu: {str(e)}"
             )
 
     def validate_inputs(self):
@@ -273,12 +278,7 @@ class PostSchedulerUI(QMainWindow):
                 )
                 return False
                 
-        interval = timedelta(
-            hours=self.interval_hours.value(),
-            minutes=self.interval_minutes.value()
-        )
-        
-        if interval.total_seconds() == 0:
+        if self.interval_hours.value() == 0 and self.interval_minutes.value() == 0:
             QMessageBox.warning(
                 self, 
                 "Hata", 
@@ -287,6 +287,65 @@ class PostSchedulerUI(QMainWindow):
             return False
             
         return True
+
+    def clear_form(self):
+        self.files_list.clear()
+        self.title_template.clear()
+        self.description_template.clear()
+        self.youtube_radio.setChecked(False)
+        self.instagram_radio.setChecked(False)
+        self.instagram_reels_radio.setChecked(False)
+        self.insta_username.clear()
+        self.insta_password.clear()
+        self.start_date.setDateTime(QDateTime.currentDateTime())
+        self.start_time.setTime(QTime.currentTime())
+        self.interval_hours.setValue(0)
+        self.interval_minutes.setValue(0)
+
+    def load_scheduled_posts(self):
+        try:
+            conn = sqlite3.connect('scheduler.db')
+            c = conn.cursor()
+            
+            posts = c.execute('''
+                SELECT id, platform, file_path, scheduled_time, status, 
+                       title, description
+                FROM scheduled_posts 
+                ORDER BY scheduled_time
+            ''').fetchall()
+            
+            self.posts_table.setRowCount(len(posts))
+            for i, post in enumerate(posts):
+                self.posts_table.setItem(i, 0, QTableWidgetItem(str(post[1])))  # Platform
+                self.posts_table.setItem(i, 1, QTableWidgetItem(os.path.basename(str(post[2]))))  # Dosya
+                self.posts_table.setItem(i, 2, QTableWidgetItem(str(post[3])))  # Tarih/Saat
+                self.posts_table.setItem(i, 3, QTableWidgetItem(str(post[4])))  # Durum
+                self.posts_table.setItem(i, 4, QTableWidgetItem(str(post[5] or "")))  # Başlık
+                self.posts_table.setItem(i, 5, QTableWidgetItem(str(post[6] or "")))  # Açıklama
+            
+            conn.close()
+        except Exception as e:
+            print(f"Veritabanı okuma hatası: {str(e)}")
+            QMessageBox.warning(self, "Hata", "Planlanan gönderiler yüklenirken bir hata oluştu!")
+
+    def save_post_to_db(self, platform, file_path, scheduled_time, title='', description=''):
+        try:
+            conn = sqlite3.connect('scheduler.db')
+            c = conn.cursor()
+            
+            c.execute('''INSERT INTO scheduled_posts 
+                        (platform, file_path, scheduled_time, status, title, description)
+                        VALUES (?, ?, ?, ?, ?, ?)''',
+                     (platform, file_path, scheduled_time.isoformat(), 
+                      "Bekliyor", title, description))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Veritabanı kayıt hatası: {str(e)}")
+            QMessageBox.warning(self, "Hata", "Gönderi kaydedilirken bir hata oluştu!")
+            return False
 
     def upload_youtube_video(self, file_path, title, description):
         try:
@@ -300,10 +359,10 @@ class PostSchedulerUI(QMainWindow):
                 'snippet': {
                     'title': title,
                     'description': description,
-                    'categoryId': '22'
+                    'categoryId': '22'  # People & Blogs kategorisi
                 },
                 'status': {
-                    'privacyStatus': 'private'
+                    'privacyStatus': 'private'  # veya 'public', 'unlisted'
                 }
             }
             
@@ -333,7 +392,7 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             print(f"YouTube yükleme hatası: {str(e)}")
             return False, str(e)
-            
+
     def authenticate_youtube(self):
         try:
             SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
@@ -397,8 +456,7 @@ class PostSchedulerUI(QMainWindow):
             
             posts = c.execute('''
                 SELECT id, platform, file_path, scheduled_time, status, 
-                       COALESCE(title, '') as title, 
-                       COALESCE(description, '') as description
+                       title, description
                 FROM scheduled_posts 
                 WHERE status = 'Bekliyor' 
                 AND datetime(scheduled_time) <= datetime(?)
@@ -419,7 +477,7 @@ class PostSchedulerUI(QMainWindow):
                         is_reels = (platform == "Instagram Reels")
                         success, result = self.upload_instagram_post(
                             file_path, 
-                            f"{title}\n\n{description}",
+                            f"{title}\n\n{description}" if title or description else "",
                             is_reels
                         )
                         
@@ -452,62 +510,6 @@ class PostSchedulerUI(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_scheduled_posts)
         self.timer.start(60000)  # Her dakika kontrol et
-
-
-
-    def load_scheduled_posts(self):
-        try:
-            conn = sqlite3.connect('scheduler.db')
-            c = conn.cursor()
-
-            # Tüm kayıtları al
-            posts = c.execute('''
-                SELECT id, platform, file_path, scheduled_time, status, 
-                       COALESCE(title, '') as title, 
-                       COALESCE(description, '') as description
-                FROM scheduled_posts 
-                ORDER BY scheduled_time
-            ''').fetchall()
-
-            # Tabloyu temizle ve yeni kayıtları ekle
-            self.posts_table.setRowCount(len(posts))
-            for i, post in enumerate(posts):
-                self.posts_table.setItem(i, 0, QTableWidgetItem(str(post[1])))  # Platform
-                self.posts_table.setItem(i, 1, QTableWidgetItem(os.path.basename(str(post[2]))))  # Dosya
-                self.posts_table.setItem(i, 2, QTableWidgetItem(str(post[3])))  # Tarih/Saat
-                self.posts_table.setItem(i, 3, QTableWidgetItem(str(post[4])))  # Durum
-                self.posts_table.setItem(i, 4, QTableWidgetItem(str(post[5])))  # Başlık
-                self.posts_table.setItem(i, 5, QTableWidgetItem(str(post[6])))  # Açıklama
-
-            conn.close()
-        except Exception as e:
-            print(f"Veritabanı okuma hatası: {str(e)}")
-            QMessageBox.warning(self, "Hata", "Planlanan gönderiler yüklenirken bir hata oluştu!")
-
-    def save_post_to_db(self, platform, file_path, scheduled_time, title='', description=''):
-        try:
-            conn = sqlite3.connect('scheduler.db')
-            c = conn.cursor()
-
-            c.execute('''INSERT INTO scheduled_posts 
-                        (platform, file_path, scheduled_time, status, title, description)
-                        VALUES (?, ?, ?, ?, ?, ?)''',
-                     (platform, file_path, scheduled_time.isoformat(), 
-                      "Bekliyor", title, description))
-
-            conn.commit()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"Veritabanı kayıt hatası: {str(e)}")
-            QMessageBox.warning(self, "Hata", "Gönderi kaydedilirken bir hata oluştu!")
-            return False
-
-    def update_posts_table(self):
-        self.load_scheduled_posts()
-
-
-
 
 def main():
     app = QApplication(sys.argv)
