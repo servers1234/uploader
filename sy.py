@@ -45,7 +45,7 @@ class PostSchedulerUI(QMainWindow):
         
         # Zamanlayıcıyı başlat
         self.start_scheduler()
-        self.init_database()
+
     def create_ui_components(self):
         # Üst kısım - Gönderi ekleme alanı
         top_group = QGroupBox("Yeni Gönderi Planla")
@@ -235,7 +235,7 @@ class PostSchedulerUI(QMainWindow):
                 try:
                     # Hata durumunda yedek tabloyu geri yükle
                     if has_backup:
-                        c.execute('DROP TABLE IF EXISTS scheduled_posts')
+                        c.execute('DROP TABLE IF NOT EXISTS scheduled_posts')
                         c.execute('ALTER TABLE scheduled_posts_backup RENAME TO scheduled_posts')
                     conn.commit()
                 except:
@@ -509,10 +509,7 @@ class PostSchedulerUI(QMainWindow):
             creds = None
             
             if os.path.exists('youtube_token.json'):
-                os.remove('youtube_token.json')  # Delete existing token file to force re-authentication
-                
-            if os.path.exists('youtube_token.json'):
-                creds = Credentials.from_authorized_user_file('youtube_token.json',creds, SCOPES)
+                creds = Credentials.from_authorized_user_file('youtube_token.json', SCOPES)
                 
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
@@ -547,15 +544,19 @@ class PostSchedulerUI(QMainWindow):
             response = request.execute()
 
             categories = response.get('items', [])
-            for category in categories:
-                print(f"Category ID: {category['id']}, Title: {category['snippet']['title']}")
+            return {category['snippet']['title']: category['id'] for category in categories}
         
         except Exception as e:
             print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
+            return {}
+
+    def get_youtube_categories(self):
+        categories = self.fetch_youtube_categories()
+        self.category.addItems(categories.keys())
+        return categories
+
     def validate_video_for_reels(self, file_path):
         try:
-            from moviepy.editor import VideoFileClip
-
             if not os.path.exists(file_path):
                 raise Exception("Video dosyası bulunamadı")
 
@@ -611,9 +612,11 @@ class PostSchedulerUI(QMainWindow):
         except Exception as e:
             raise Exception(f"Video önişleme hatası: {str(e)}")
 
-
     def upload_instagram_post(self, file_path, caption, is_reels=False, is_story=False):
         try:
+            if not self.insta_username.text() or not self.insta_password.text():
+                raise Exception("Instagram login failed: Both username and password must be provided.")
+
             if not self.instagram_client:
                 self.instagram_client = Client()
                 try:
@@ -632,7 +635,6 @@ class PostSchedulerUI(QMainWindow):
             temp_file = os.path.join(temp_dir, os.path.basename(file_path))
 
             try:
-                import shutil
                 shutil.copy2(file_path, temp_file)
 
                 if is_story:
@@ -682,7 +684,6 @@ class PostSchedulerUI(QMainWindow):
             print(f"Instagram yükleme hatası: {str(e)}")
             return False, str(e)
 
-# Example check_scheduled_posts method call to ensure correct parameters
     def check_scheduled_posts(self):
         try:
             conn = sqlite3.connect('scheduler.db')
@@ -781,35 +782,13 @@ class PostSchedulerUI(QMainWindow):
 
             conn.close()
 
-            # Tabloyu güncelle
-
         except Exception as e:
             print(f"Zamanlayıcı hatası: {str(e)}")
-
 
     def start_scheduler(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_scheduled_posts)
         self.timer.start(60000)  # Her dakika kontrol et
-
-    def get_youtube_categories(self):
-        try:
-            if not self.youtube_credentials:
-                if not self.authenticate_youtube():
-                    raise Exception("YouTube kimlik doğrulaması başarısız!")
-                    
-            youtube = build('youtube', 'v3', credentials=self.youtube_credentials)
-            request = youtube.videoCategories().list(part="snippet", regionCode="TR")
-            response = request.execute()
-            
-            categories = {item["snippet"]["title"]: item["id"] for item in response["items"]}
-            self.category.addItems(categories.keys())
-            return categories
-            
-        except Exception as e:
-            print(f"YouTube kategorileri alınırken hata oluştu: {str(e)}")
-            QMessageBox.warning(self, "Hata", "YouTube kategorileri alınırken hata oluştu!")
-            return {}
 
 def main():
     app = QApplication(sys.argv)
