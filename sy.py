@@ -616,75 +616,80 @@ class PostSchedulerUI(QMainWindow):
         try:
             if not self.instagram_client:
                 self.instagram_client = Client()
-                self.instagram_client.login(
-                    self.insta_username.text(),
-                    self.insta_password.text()
-                )
-            
-            print(f"Instagram'a yükleniyor: {os.path.basename(file_path)}")
-            
-            # Dosya uzantısını kontrol et
-            is_video = file_path.lower().endswith('.mp4')
-            
-            if is_reels:
-                if not is_video:
-                    raise Exception("Reels için sadece MP4 formatı desteklenir!")
-                    
-                is_valid, error_msg = self.validate_video_for_reels(file_path)
-                if not is_valid:
-                    raise Exception(f"Video doğrulama hatası: {error_msg}")
-                    
                 try:
+                    self.instagram_client.login(
+                        self.insta_username.text(),
+                        self.insta_password.text()
+                    )
+                except Exception as login_error:
+                    raise Exception(f"Instagram login failed: {str(login_error)}")
+
+            print(f"Instagram'a yükleniyor: {os.path.basename(file_path)}")
+
+            # Create a copy of the file in a temporary directory
+            temp_dir = os.path.join(os.path.dirname(file_path), 'temp_uploads')
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file = os.path.join(temp_dir, os.path.basename(file_path))
+
+            try:
+                import shutil
+                shutil.copy2(file_path, temp_file)
+
+                if is_story:
+                    # Handle story upload
+                    if temp_file.lower().endswith('.mp4'):
+                        media = self.instagram_client.video_story_upload(temp_file)
+                    else:
+                        media = self.instagram_client.photo_story_upload(temp_file)
+                elif is_reels:
+                    if not temp_file.lower().endswith('.mp4'):
+                        raise Exception("Reels için sadece MP4 formatı desteklenir!")
+
                     media = self.instagram_client.clip_upload(
-                        file_path,
-                        caption=caption,
-                        extra_data={
-                            "custom_accessibility_caption": "",
-                            "like_and_view_counts_disabled": False,
-                            "disable_comments": False
-                        }
-                    )
-                except Exception as upload_error:
-                    raise Exception(f"Reels yükleme hatası: {str(upload_error)}")
-            
-            elif is_story:
-                if is_video:
-                    media = self.instagram_client.video_upload_to_story(
-                        file_path,
+                        path=temp_file,
                         caption=caption
                     )
                 else:
-                    media = self.instagram_client.photo_upload_to_story(
-                        file_path,
-                        caption=caption
-                    )
-            
-            else:
-                if is_video:
-                    media = self.instagram_client.video_upload(
-                        file_path,
-                        caption=caption
-                    )
-                else:
-                    media = self.instagram_client.photo_upload(
-                        file_path,
-                        caption=caption
-                    )
-                        
-            print(f"Instagram'a yükleme başarılı: {os.path.basename(file_path)}")
-            return True, media.pk
-                
+                    if temp_file.lower().endswith('.mp4'):
+                        media = self.instagram_client.video_upload(
+                            path=temp_file,
+                            caption=caption
+                        )
+                    else:
+                        media = self.instagram_client.photo_upload(
+                            path=temp_file,
+                            caption=caption
+                        )
+
+                print(f"Instagram'a yükleme başarılı: {os.path.basename(file_path)}")
+                return True, media.pk
+
+            finally:
+                # Ensure the file is closed before attempting to delete
+                if 'media' in locals():
+                    del media  # Delete the media object to release any file handles
+
+                # Clean up temporary files
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                    if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                        os.rmdir(temp_dir)
+                except Exception as cleanup_error:
+                    print(f"Geçici dosya temizleme hatası: {str(cleanup_error)}")
+
         except Exception as e:
             print(f"Instagram yükleme hatası: {str(e)}")
             return False, str(e)
 
+# Example check_scheduled_posts method call to ensure correct parameters
     def check_scheduled_posts(self):
         try:
             conn = sqlite3.connect('scheduler.db')
             c = conn.cursor()
-            
+
             current_time = datetime.now()
-            
+
             # Bekleyen gönderileri getir
             posts = c.execute('''
                 SELECT id, platform, file_path, scheduled_time, status, 
@@ -694,10 +699,10 @@ class PostSchedulerUI(QMainWindow):
                 AND datetime(scheduled_time) <= datetime(?)
                 ORDER BY scheduled_time ASC
             ''', (current_time.isoformat(),)).fetchall()
-            
+
             for post in posts:
                 post_id, platform, file_path, scheduled_time, status, title, description, privacy_status, made_for_kids, category, tags = post
-                
+
                 # Dosyanın varlığını kontrol et
                 if not os.path.exists(file_path):
                     error_status = f"Hata: Dosya bulunamadı - {file_path}"
@@ -709,7 +714,7 @@ class PostSchedulerUI(QMainWindow):
                     success = False
                     result = ""
                     processed_file = None
-                    
+
                     # Platform bazlı yükleme işlemleri
                     if platform == "YouTube":
                         success, result = self.upload_youtube_video(
@@ -718,7 +723,7 @@ class PostSchedulerUI(QMainWindow):
                     else:
                         is_reels = (platform == "Instagram Reels")
                         is_story = (platform == "Instagram Story")
-                        
+
                         # Video işleme gerekiyorsa
                         if is_reels or (is_story and file_path.lower().endswith('.mp4')):
                             try:
@@ -728,7 +733,7 @@ class PostSchedulerUI(QMainWindow):
                                 raise Exception(f"Video işleme hatası: {str(process_error)}")
                         else:
                             upload_file = file_path
-                            
+
                         try:
                             # Instagram yükleme işlemi
                             success, result = self.upload_instagram_post(
@@ -744,22 +749,22 @@ class PostSchedulerUI(QMainWindow):
                                     os.remove(processed_file)
                                 except Exception as cleanup_error:
                                     print(f"Geçici dosya temizleme hatası: {str(cleanup_error)}")
-                        
+
                     # Durumu güncelle
                     new_status = "Yüklendi" if success else f"Hata: {result}"
                     upload_time = datetime.now().isoformat()
-                    
+
                     c.execute('''
                         UPDATE scheduled_posts 
                         SET status = ?,
                             upload_time = ?
                         WHERE id = ?
                     ''', (new_status, upload_time, post_id))
-                    
+
                     # Başarılı yükleme logunu kaydet
                     if success:
                         print(f"Başarılı yükleme: {platform} - {os.path.basename(file_path)} - {upload_time}")
-                    
+
                 except Exception as e:
                     error_status = f"Hata: {str(e)}"
                     c.execute('''
@@ -770,19 +775,17 @@ class PostSchedulerUI(QMainWindow):
                         WHERE id = ?
                     ''', (error_status, str(e), datetime.now().isoformat(), post_id))
                     print(f"Gönderi yükleme hatası ({platform}): {str(e)}")
-                
+
                 # Her işlemden sonra değişiklikleri kaydet
                 conn.commit()
-            
+
             conn.close()
-            
+
             # Tabloyu güncelle
-            self.load_scheduled_posts()
-            
+
         except Exception as e:
             print(f"Zamanlayıcı hatası: {str(e)}")
-            if 'conn' in locals() and conn:
-                conn.close()
+
 
     def start_scheduler(self):
         self.timer = QTimer()
